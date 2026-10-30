@@ -22,6 +22,9 @@ export default function SiteHeader() {
           <Link href="/reuniao" className="transition-colors hover:text-teal-dark">
             Reunião Operacional
           </Link>
+          <Link href="/historico" className="transition-colors hover:text-teal-dark">
+            Histórico
+          </Link>
           <Link href="/whatsapp" className="transition-colors hover:text-teal-dark">
             Grupos WhatsApp
           </Link>

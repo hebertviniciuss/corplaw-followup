@@ -7,10 +7,36 @@ export type FollowupSection = "mentioned" | "not-mentioned" | "outside-active-me
 export type FollowupResult = {
   clientName: string;
   activeStatus: string;
+  demand: string;
   mentioned: boolean;
   message: string;
   section: FollowupSection;
 };
+
+type TaskState =
+  | { kind: "idle" }
+  | { kind: "creating" }
+  | { kind: "created"; url: string | null }
+  | { kind: "failed"; error: string };
+
+function TaskBadge({ state }: { state: TaskState }) {
+  switch (state.kind) {
+    case "creating":
+      return <span className="text-xs text-navy/50">criando task…</span>;
+    case "created":
+      return state.url ? (
+        <a href={state.url} target="_blank" rel="noopener noreferrer" className="text-xs font-medium text-teal-dark underline">
+          task criada no ClickUp ✅
+        </a>
+      ) : (
+        <span className="text-xs font-medium text-teal-dark">task criada no ClickUp ✅</span>
+      );
+    case "failed":
+      return <span className="text-xs font-medium text-red-600">falhou ❌ ({state.error})</span>;
+    default:
+      return null;
+  }
+}
 
 type SendState =
   | { kind: "idle" }
@@ -45,6 +71,9 @@ function FollowupRow({
   selected,
   onToggleSelect,
   sendState,
+  taskState,
+  createTaskEnabled,
+  meetingDate,
 }: {
   result: FollowupResult;
   message: string;
@@ -52,6 +81,9 @@ function FollowupRow({
   selected: boolean;
   onToggleSelect: () => void;
   sendState: SendState;
+  taskState: TaskState;
+  createTaskEnabled: boolean;
+  meetingDate: string;
 }) {
   const [copied, setCopied] = useState(false);
 
@@ -75,6 +107,7 @@ function FollowupRow({
           <h3 className="font-semibold text-navy">{result.clientName}</h3>
           <span className="text-xs text-navy/50">Status: {result.activeStatus}</span>
           <SendBadge state={sendState} />
+          {createTaskEnabled && <TaskBadge state={taskState} />}
         </div>
         <div className="flex gap-2">
           <button
@@ -131,13 +164,22 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export default function FollowupResults({ results }: { results: FollowupResult[] }) {
+export default function FollowupResults({
+  results,
+  meetingDate,
+}: {
+  results: FollowupResult[];
+  meetingDate: string;
+}) {
   const [messages, setMessages] = useState<Record<string, string>>(() =>
     Object.fromEntries(results.map((r) => [r.clientName, r.message]))
   );
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [sendStates, setSendStates] = useState<Record<string, SendState>>({});
   const [sending, setSending] = useState(false);
+  const [createTasks, setCreateTasks] = useState(false);
+  const [taskStates, setTaskStates] = useState<Record<string, TaskState>>({});
+  const [creatingTasks, setCreatingTasks] = useState(false);
 
   const bySection = SECTION_ORDER.map((section) => ({
     section,
@@ -227,6 +269,57 @@ export default function FollowupResults({ results }: { results: FollowupResult[]
     }
   }
 
+  async function handleCreateTasks() {
+    const clientNames = Array.from(selected);
+    if (clientNames.length === 0) return;
+
+    setCreatingTasks(true);
+    setTaskStates((prev) => {
+      const next = { ...prev };
+      for (const name of clientNames) next[name] = { kind: "creating" };
+      return next;
+    });
+
+    try {
+      const res = await fetch("/api/clickup/task", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          items: clientNames.map((clientName) => ({
+            clientName,
+            demand: results.find((r) => r.clientName === clientName)?.demand ?? "",
+            meetingDate,
+            message: messages[clientName] ?? "",
+          })),
+        }),
+      });
+      const { results: taskResults } = (await res.json()) as {
+        results: Array<
+          { clientName: string; ok: true; taskId: string; url: string | null }
+          | { clientName: string; ok: false; error: string }
+        >;
+      };
+
+      setTaskStates((prev) => {
+        const next = { ...prev };
+        for (const r of taskResults) {
+          next[r.clientName] = r.ok ? { kind: "created", url: r.url } : { kind: "failed", error: r.error };
+        }
+        return next;
+      });
+    } catch {
+      setTaskStates((prev) => {
+        const next = { ...prev };
+        for (const name of clientNames) {
+          if (next[name].kind === "creating") next[name] = { kind: "failed", error: "erro de rede" };
+        }
+        return next;
+      });
+    } finally {
+      setCreatingTasks(false);
+    }
+  }
+
   return (
     <div className="flex flex-col gap-8">
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-teal-light/50 p-3">
@@ -235,13 +328,33 @@ export default function FollowupResults({ results }: { results: FollowupResult[]
           ativo foram mencionados na transcrição. <strong className="text-teal-dark">{selected.size}</strong>{" "}
           selecionado(s) para envio automático.
         </p>
-        <button
-          onClick={handleBulkSend}
-          disabled={selected.size === 0 || sending}
-          className="rounded-md bg-[#25D366] px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-[#128C7E] disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {sending ? "Enviando…" : `Enviar selecionados via WhatsApp (${selected.size})`}
-        </button>
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="flex cursor-pointer items-center gap-2 text-sm text-navy/70">
+            <input
+              type="checkbox"
+              checked={createTasks}
+              onChange={(e) => setCreateTasks(e.target.checked)}
+              className="h-4 w-4 accent-teal"
+            />
+            Criar tarefas no ClickUp
+          </label>
+          {createTasks && (
+            <button
+              onClick={handleCreateTasks}
+              disabled={selected.size === 0 || creatingTasks}
+              className="rounded-md bg-navy px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-navy/80 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {creatingTasks ? "Criando…" : `Subir tarefas no ClickUp (${selected.size})`}
+            </button>
+          )}
+          <button
+            onClick={handleBulkSend}
+            disabled={selected.size === 0 || sending}
+            className="rounded-md bg-[#25D366] px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-[#128C7E] disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {sending ? "Enviando…" : `Enviar selecionados via WhatsApp (${selected.size})`}
+          </button>
+        </div>
       </div>
 
       {bySection.map(({ section, items }) => {
@@ -266,6 +379,9 @@ export default function FollowupResults({ results }: { results: FollowupResult[]
                   selected={selected.has(result.clientName)}
                   onToggleSelect={() => toggleSelect(result.clientName)}
                   sendState={sendStates[result.clientName] ?? { kind: "idle" }}
+                  taskState={taskStates[result.clientName] ?? { kind: "idle" }}
+                  createTaskEnabled={createTasks}
+                  meetingDate={meetingDate}
                 />
               ))}
             </div>

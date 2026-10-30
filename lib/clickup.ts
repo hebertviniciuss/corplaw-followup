@@ -31,14 +31,15 @@ function customFieldValue(task: RawTask, fieldName: string): string | null {
   return String(field.value);
 }
 
-async function clickupFetch(path: string): Promise<unknown> {
+async function clickupFetch(path: string, options?: RequestInit): Promise<unknown> {
   const token = process.env.CLICKUP_API_TOKEN;
   if (!token) {
     throw new Error("CLICKUP_API_TOKEN não configurado no ambiente.");
   }
 
   const res = await fetch(`${CLICKUP_API_BASE}${path}`, {
-    headers: { Authorization: token },
+    ...options,
+    headers: { Authorization: token, "Content-Type": "application/json", ...(options?.headers ?? {}) },
     cache: "no-store",
   });
 
@@ -124,4 +125,23 @@ export function parseClientFromTaskName(name: string): ParsedClient | null {
   }
 
   return { clientName, demand };
+}
+
+/**
+ * Cria uma task na lista do ClickUp. Usado para subir tarefas de follow-up
+ * quando o usuário opta por isso na tela de reunião (opcional).
+ */
+export async function createClickUpTask(params: {
+  name: string;
+  description?: string;
+}): Promise<{ id: string; url: string | null }> {
+  const body: Record<string, unknown> = { name: params.name };
+  if (params.description) body.markdown_description = params.description;
+
+  const data = (await clickupFetch(`/list/${SOCIETARIO_LIST_ID}/task`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  })) as { id: string; url?: string };
+
+  return { id: data.id, url: data.url ?? null };
 }

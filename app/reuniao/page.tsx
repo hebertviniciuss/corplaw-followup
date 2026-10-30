@@ -88,6 +88,7 @@ export default function ReuniaoPage() {
       const generated: FollowupResult[] = pending.map((p) => ({
         clientName: p.clientName,
         activeStatus: p.activeStatus,
+        demand: p.demand,
         mentioned: p.mentioned,
         section: p.section,
         message: messages[p.clientName] ?? "",
@@ -154,7 +155,7 @@ export default function ReuniaoPage() {
       {results && (
         <section className="flex flex-col gap-4">
           <h2 className="text-base font-semibold text-navy">Follow-ups gerados</h2>
-          <FollowupResults results={results} />
+          <FollowupResults results={results} meetingDate={meetingDate} />
         </section>
       )}
     </div>
